@@ -1,13 +1,4 @@
 <!DOCTYPE html>
-<script type="application/json" id="cowork-artifact-meta">
-{
-  "name": "Appellation Healdsburg Budget Rpi",
-  "schemaVersion": 1,
-  "description": "Appellation Healdsburg Budget RPI & Room Revenue Tool — universal editable budgeting dashboard (108 keys, comp set 516, market 4,016, Hilton Redemptions ON). 7 tabs: Summary, All Years, RPI, Market & Supply, Group Pace, Segmentation, Data·Inputs. Live \"Refresh OTB from link\" (same-origin) + file/Excel refresh fallback.",
-  "mcpTools": [],
-  "mcpServerNames": []
-}
-</script>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -1839,5 +1830,99 @@ function loadMetaToUI(){
   loadMetaToUI();loadPickupMeta();renderAll();updateUndoUI();
 })();
 </script>
+
+<!-- ===================== SHARED (MULTI-USER) SYNC — Supabase ===================== -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+(function(){
+  var SUPABASE_URL="https://bupgiucmjfnnhfugdski.supabase.co", SUPABASE_KEY="sb_publishable_DA_YNFLdHHxBs__KMeAtoQ_y2TmWG1e", TABLE="hbg_budget";
+  if(typeof supabase==="undefined"||!/^https:\/\//.test(SUPABASE_URL)){console.warn("Supabase not loaded");return;}
+  var sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+  var ready=false, remoteStamp=null;
+  var who=(function(){try{return localStorage.getItem("hbg_whoami")||"";}catch(_){return "";}})();
+
+  // ---- floating status chip ----
+  var chip=document.createElement("div");
+  chip.style.cssText="position:fixed;left:12px;bottom:12px;z-index:9999;background:#2b2a26;color:#efe9df;"
+    +"font:12px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;padding:7px 12px;border-radius:8px;"
+    +"box-shadow:0 2px 10px rgba(0,0,0,.25);max-width:340px;display:flex;gap:8px;align-items:center";
+  chip.innerHTML='<span id="sync-dot" style="width:8px;height:8px;border-radius:50%;background:#c08a2d;flex:none"></span>'
+    +'<span id="sync-note">Connecting to shared budget…</span>'
+    +'<a href="#" id="sync-refresh" style="color:#e3b778;text-decoration:none;flex:none">refresh</a>';
+  document.body.appendChild(chip);
+  function note(t,ok){var n=document.getElementById("sync-note");if(n)n.textContent=t;
+    var d=document.getElementById("sync-dot");if(d)d.style.background=ok===false?"#c0392b":(ok?"#4a7a52":"#c08a2d");}
+
+  function snap(){
+    try{
+      var p=S.perf.property[2027]||[];
+      return {
+        inputs2027:{occ:p.map(function(r){return r.occ;}), adr:p.map(function(r){return r.adr;})},
+        segmentation:S.seg,
+        comments:{rpi:(S.comments&&S.comments.rpi)||{}, pace:(S.comments&&S.comments.pace)||{}, inputs:(S.comments&&S.comments.inputs)||{}},
+        market:S.market
+      };
+    }catch(e){return null;}
+  }
+  function nonEmpty(o){return o && typeof o==="object" && Object.keys(o).length>0;}
+  function apply(map){
+    try{
+      if(map.inputs2027 && map.inputs2027.occ){for(var m=0;m<12;m++){if(S.perf.property[2027][m]){
+        if(map.inputs2027.occ[m]!=null)S.perf.property[2027][m].occ=map.inputs2027.occ[m];
+        if(map.inputs2027.adr && map.inputs2027.adr[m]!=null)S.perf.property[2027][m].adr=map.inputs2027.adr[m];}}}
+      if(nonEmpty(map.segmentation))S.seg=map.segmentation;
+      if(map.comments){S.comments=S.comments||{};
+        if(nonEmpty(map.comments.rpi))S.comments.rpi=map.comments.rpi;
+        if(nonEmpty(map.comments.pace))S.comments.pace=map.comments.pace;
+        if(nonEmpty(map.comments.inputs))S.comments.inputs=map.comments.inputs;}
+      if(nonEmpty(map.market))S.market=map.market;
+    }catch(e){console.warn("apply",e);}
+  }
+
+  async function loadRemote(){
+    try{
+      var res=await sb.from(TABLE).select("section,data,last_modified,last_modified_by");
+      if(res.error){note("Offline (view only): "+res.error.message,false);return;}
+      var map={}, latest=null, byWho="";
+      (res.data||[]).forEach(function(r){map[r.section]=r.data; if(!latest||r.last_modified>latest){latest=r.last_modified;byWho=r.last_modified_by||"";}});
+      remoteStamp=latest;
+      apply(map);
+      if(typeof renderAll==="function")renderAll();
+      var any=(res.data||[]).some(function(r){return nonEmpty(r.data);});
+      note(any?("Shared budget loaded"+(byWho?(" · last edit by "+byWho):"")+(latest?(" · "+new Date(latest).toLocaleString()):"")):"Shared budget ready — your edits will sync to the team", true);
+      ready=true;
+    }catch(e){note("Offline (view only)",false);}
+  }
+
+  var pushT=null;
+  function schedulePush(){ if(!ready)return; clearTimeout(pushT); pushT=setTimeout(flush,900); }
+  async function flush(){
+    if(!who){ try{who=(window.prompt("Enter your name so teammates can see who edited the budget:")||"").slice(0,60);localStorage.setItem("hbg_whoami",who);}catch(_){}}
+    var s=snap(); if(!s){return;}
+    note("Saving to shared budget…");
+    try{
+      var secs=["inputs2027","segmentation","comments","market"];
+      for(var i=0;i<secs.length;i++){
+        var r=await sb.from(TABLE).update({data:s[secs[i]], last_modified_by:who||null}).eq("section",secs[i]);
+        if(r.error){note("Save failed: "+r.error.message,false);return;}
+      }
+      note("Saved to shared budget · "+new Date().toLocaleTimeString()+(who?(" · "+who):""), true);
+    }catch(e){note("Save failed",false);}
+  }
+
+  // any edit to the budget (2027 inputs, segmentation, comments, market) → push shared
+  ["input","change"].forEach(function(ev){
+    document.addEventListener(ev,function(e){
+      var t=e.target; if(!t||t.id==="sync-refresh")return;
+      if(t.matches && t.matches("input,select,textarea")) schedulePush();
+    }, false);
+  });
+  document.getElementById("sync-refresh").addEventListener("click",function(e){e.preventDefault();loadRemote();});
+
+  loadRemote();
+  setInterval(function(){ if(!document.querySelector("textarea:focus,input:focus,select:focus")) loadRemote(); }, 60000);
+})();
+</script>
+<!-- =============================================================================== -->
 </body>
 </html>
